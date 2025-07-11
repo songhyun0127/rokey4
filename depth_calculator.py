@@ -10,29 +10,28 @@ import numpy as np
 
 
 class DepthCalculator(Node):
-    def __init__(self):
+    def __init__(self, x, y):
         super().__init__('depth_calculator')
 
-        # 브리지 및 변수 초기화
         self.bridge = CvBridge()
         self.rgb_image = None
         self.depth_image = None
         self.fx = self.fy = self.cx = self.cy = None
 
-        # 토픽 구독자 설정
+        # 사용자 입력 좌표
+        self.target_x = x
+        self.target_y = y
+
+        # 구독자 등록
         self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 10)
         self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, 10)
         self.create_subscription(CameraInfo, '/camera/depth/camera_info', self.camera_info_callback, 10)
 
-        # OpenCV 윈도우 및 마우스 콜백
         cv2.namedWindow("RGB Image")
-        cv2.setMouseCallback("RGB Image", self.mouse_callback)
 
     def rgb_callback(self, msg):
         self.rgb_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        if self.rgb_image is not None:
-            cv2.imshow("RGB Image", self.rgb_image)
-            cv2.waitKey(1)
+        self.display_with_depth()
 
     def depth_callback(self, msg):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -43,39 +42,44 @@ class DepthCalculator(Node):
         self.cx = msg.k[2]
         self.cy = msg.k[5]
 
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            if self.depth_image is None:
-                self.get_logger().warn('Depth image not received yet.')
-                return
+    def display_with_depth(self):
+        if self.rgb_image is None or self.depth_image is None:
+            return
 
-            try:
-                depth = float(self.depth_image[y, x])
-            except IndexError:
-                self.get_logger().warn(f'Clicked point ({x}, {y}) is out of bounds.')
-                return
+        image = self.rgb_image.copy()
 
-            if depth == 0 or np.isnan(depth):
-                self.get_logger().warn(f'Depth at ({x}, {y}) is zero or invalid.')
-                return
+        try:
+            depth = float(self.depth_image[self.target_y, self.target_x])
+        except IndexError:
+            self.get_logger().warn(f"좌표 ({self.target_x}, {self.target_y}) 가 이미지 범위를 벗어났습니다.")
+            return
 
-            # 거리 단위 보정 (mm → m)
+        if depth == 0 or np.isnan(depth):
+            text = f"({self.target_x}, {self.target_y}) → No Depth Data"
+        else:
             depth_m = depth / 1000.0
-            self.get_logger().info(f"Clicked ({x}, {y}) → Depth: {depth_m:.3f} m")
+            text = f"({self.target_x}, {self.target_y}) → {depth_m:.2f} m"
 
-            # 선택적으로 3D 좌표 변환
-            if None not in (self.fx, self.fy, self.cx, self.cy):
-                X = (x - self.cx) * depth_m / self.fx
-                Y = (y - self.cy) * depth_m / self.fy
-                Z = depth_m
-                self.get_logger().info(f"3D Coordinates → X: {X:.3f}, Y: {Y:.3f}, Z: {Z:.3f}")
-            else:
-                self.get_logger().warn("Camera intrinsics not yet received.")
+        cv2.circle(image, (self.target_x, self.target_y), 5, (0, 0, 255), -1)
+        cv2.putText(image, text, (self.target_x + 10, self.target_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+        cv2.imshow("RGB Image", image)
+        cv2.waitKey(1)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = DepthCalculator()
+
+    # 사용자 입력 받기
+    try:
+        x = int(input("X 좌표를 입력하세요: "))
+        y = int(input("Y 좌표를 입력하세요: "))
+    except Exception as e:
+        print("좌표 입력 오류:", e)
+        return
+
+    node = DepthCalculator(x, y)
 
     try:
         rclpy.spin(node)
