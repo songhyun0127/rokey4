@@ -1,40 +1,39 @@
-# depth_calculator.py
-
 import rclpy
 from rclpy.node import Node
 
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
-import cv2
 import numpy as np
+import time
 
 
 class DepthCalculator(Node):
     def __init__(self, x, y):
-        super().__init__('depth_calculator')
+        super().__init__('depth_calculator_terminal')
 
         self.bridge = CvBridge()
-        self.rgb_image = None
         self.depth_image = None
+        self.rgb_image = None
+
         self.fx = self.fy = self.cx = self.cy = None
 
-        # 사용자 입력 좌표
         self.target_x = x
         self.target_y = y
 
+        self.last_print_time = 0
+
         # 구독자 등록
-        self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 10)
         self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, 10)
         self.create_subscription(CameraInfo, '/camera/depth/camera_info', self.camera_info_callback, 10)
-
-        cv2.namedWindow("RGB Image")
+        self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 10)
 
     def rgb_callback(self, msg):
+        # RGB 이미지는 표시하지 않지만, 수신은 해야 다른 토픽이 정상 동작함
         self.rgb_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        self.display_with_depth()
 
     def depth_callback(self, msg):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        self.print_depth()
 
     def camera_info_callback(self, msg):
         self.fx = msg.k[0]
@@ -42,41 +41,44 @@ class DepthCalculator(Node):
         self.cx = msg.k[2]
         self.cy = msg.k[5]
 
-    def display_with_depth(self):
-        if self.rgb_image is None or self.depth_image is None:
+    def print_depth(self):
+        if self.depth_image is None:
             return
-
-        image = self.rgb_image.copy()
 
         try:
             depth = float(self.depth_image[self.target_y, self.target_x])
         except IndexError:
-            self.get_logger().warn(f"좌표 ({self.target_x}, {self.target_y}) 가 이미지 범위를 벗어났습니다.")
+            self.get_logger().warn(f"좌표 ({self.target_x}, {self.target_y})가 이미지 범위를 벗어났습니다.")
             return
 
         if depth == 0 or np.isnan(depth):
-            text = f"({self.target_x}, {self.target_y}) → No Depth Data"
-        else:
-            depth_m = depth / 1000.0
-            text = f"({self.target_x}, {self.target_y}) → {depth_m:.2f} m"
+            self.get_logger().warn(f"({self.target_x}, {self.target_y}) → No depth data")
+            return
 
-        cv2.circle(image, (self.target_x, self.target_y), 5, (0, 0, 255), -1)
-        cv2.putText(image, text, (self.target_x + 10, self.target_y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        # 너무 자주 출력 방지 (1초에 1번)
+        now = time.time()
+        if now - self.last_print_time < 1.0:
+            return
+        self.last_print_time = now
 
-        cv2.imshow("RGB Image", image)
-        cv2.waitKey(1)
+        depth_m = depth / 1000.0
+        self.get_logger().info(f"({self.target_x}, {self.target_y}) → {depth_m:.3f} m")
+
+        if None not in (self.fx, self.fy, self.cx, self.cy):
+            X = (self.target_x - self.cx) * depth_m / self.fx
+            Y = (self.target_y - self.cy) * depth_m / self.fy
+            Z = depth_m
+            self.get_logger().info(f"  3D coordinates: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f}")
 
 
 def main(args=None):
     rclpy.init(args=args)
 
-    # 사용자 입력 받기
     try:
         x = int(input("X 좌표를 입력하세요: "))
         y = int(input("Y 좌표를 입력하세요: "))
     except Exception as e:
-        print("좌표 입력 오류:", e)
+        print(f"좌표 입력 오류: {e}")
         return
 
     node = DepthCalculator(x, y)
@@ -88,4 +90,3 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-        cv2.destroyAllWindows()
