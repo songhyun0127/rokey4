@@ -6,6 +6,8 @@ from cv_bridge import CvBridge
 import numpy as np
 import time
 
+from visualization_msgs.msg import Marker
+
 
 class DepthCalculator(Node):
     def __init__(self, x, y):
@@ -22,13 +24,13 @@ class DepthCalculator(Node):
 
         self.last_print_time = 0
 
-        # 구독자 등록
+        # ROS2 Publishers/Subscribers
         self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, 10)
-        self.create_subscription(CameraInfo, '/camera/depth/camera_info', self.camera_info_callback, 10)
         self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 10)
+        self.create_subscription(CameraInfo, '/camera/depth/camera_info', self.camera_info_callback, 10)
+        self.marker_pub = self.create_publisher(Marker, '/visualization_marker', 10)
 
     def rgb_callback(self, msg):
-        # RGB 이미지는 표시하지 않지만, 수신은 해야 다른 토픽이 정상 동작함
         self.rgb_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
@@ -55,7 +57,6 @@ class DepthCalculator(Node):
             self.get_logger().warn(f"({self.target_x}, {self.target_y}) → No depth data")
             return
 
-        # 너무 자주 출력 방지 (1초에 1번)
         now = time.time()
         if now - self.last_print_time < 1.0:
             return
@@ -69,6 +70,30 @@ class DepthCalculator(Node):
             Y = (self.target_y - self.cy) * depth_m / self.fy
             Z = depth_m
             self.get_logger().info(f"  3D coordinates: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f}")
+            self.publish_marker(X, Y, Z)
+
+    def publish_marker(self, x, y, z):
+        marker = Marker()
+        marker.header.frame_id = "camera_depth_optical_frame"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "depth_point"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.05
+        marker.scale.y = 0.05
+        marker.scale.z = 0.05
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+
+        self.marker_pub.publish(marker)
 
 
 def main(args=None):
